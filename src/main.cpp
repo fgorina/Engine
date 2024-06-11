@@ -42,7 +42,8 @@ char skpath[100] = "/signalk/v1/stream?subscribe=none";
 // it is freq * 60 / poles (cycles/s -> cycles / min * poles)
 
 
-const double poles = 6.0 * 3.0;   // Poles (6) * reduction (3)
+const double poles = 6.0;   // Number of poles in the alternatos
+const double relation = 3.0; // Relation between engine speed and alternator speed
 
 
 unsigned long last = micros();
@@ -163,18 +164,18 @@ void presentationTask(void *parameter)
       ac_period = 0;
 
       f = double(1000000) / double(period);
-      rpm = f * 60.0 / poles;
+      rpm = f * 60.0 / poles / relation;
 
       if(DEBUG_1){
         Serial.print("Ac Period "); Serial.print(old_ac_period); Serial.print(" Samples "); Serial.print(oldsamples); Serial.print(" f "); Serial.print(f); Serial.print(" RPM "); Serial.println(rpm);
       }
 
-      sendData(f / poles);
+      sendData(f / poles / relation);
 
     }else if ((micros() - last) > 1000000l){
-      f = 0;
+      f = 0.0;
       last = micros();
-      sendData(f / poles);
+      sendData(0.0);
     }
 
     vTaskDelay(50); // May be adjusted for necessity 
