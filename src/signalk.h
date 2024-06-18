@@ -5,7 +5,21 @@
 extern "C" {
 #endif
 
+
+#define metaUpdate "{\"updates\": [{\"meta\":[{\"path\":\"propulsion.1.revolutions\", \"value\": {\"units\": \"Hz\"}}]}]}"
+
+#define update1 "{ \"context\": \""
+#define update2 "\", \"updates\": [ {  \"source\": {\"label\": \"engine\" }, \"values\": [ { \"path\": \"propulsion.1.revolutions\",\"value\":"
+#define update21 "}, { \"path\": \"propulsion.1.state\",\"value\": \""
+
+#define update3 "\", \"updates\": [ {  \"source\": {\"label\": \"engine\" }, \"values\": [ { \"path\": \""
+#define update31 "\",\"value\":"
+
+#define update4 "\" } ] } ]}"
+#define update5 " } ] } ]}"
+
 void     sendMeta();
+void sendTemperature(float t, int device);
 
 void print_info()
 {
@@ -509,6 +523,21 @@ void sendData(double f)
     Serial.println(s);
   }
 }
+
+void sendTemperature(float t, int device){
+
+  float tk = t + baseKelvin;
+
+
+ String s = update1 + me + update3 + paths[device] + update31 + String(tk) +  update5;
+  client.send(s);
+  if (DEBUG_T)
+  {
+    Serial.print("Sent: ");
+    Serial.println(s);
+  }
+}
+
 
 
 #ifdef __cplusplus

@@ -2,34 +2,61 @@
 #include <EEPROM.h>
 #include <ArduinoWebsockets.h>
 #include "WiFi.h"
-//#include <Time.h>
+// #include <Time.h>
 #include <ArduinoJson.h>
 #include <ArduinoJson.hpp>
 #include <HTTPClient.h>
 #include <ESPmDNS.h>
-
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 #define DEBUG true
-#define DEBUG_1 false
+#define DEBUG_1 true
 #define DEBUG_ISR false
+#define DEBUG_T true
 
 #define EEPROM_SIZE 512
-
 
 #define IN_GPIO 16
 #define ONBOARD_LED 2
 
+const int oneWireBus = 17;
+int ntDevices;
+
+typedef union
+{
+  DeviceAddress address;
+  uint64_t id;
+} DeviceId;
+
+DeviceId tempDeviceAddress;
+
+DeviceId tempDevices[5] = {
+    {.id = (uint64_t)4198535122781495592},
+    {.id = (uint64_t)11176943009740906792},
+    {.id = (uint64_t)8501594867311599912},
+    {.id = (uint64_t)369306671541149992},
+    {.id = (uint64_t)13078325212068733224}};
+
+const String paths[5] = {
+
+    "propulsion.1.temperature",
+    "propulsion.1.exhaustTemperature",
+    "propulsion.1.engineRoomTemperature",
+    "",
+    ""
+
+};
+
+const float baseKelvin = 273.16;
+
+float tempEngine = 0.0;     // Sensor 0
+float tempExhaust = 0.0;    // Sensor 1
+float tempEngineRoom = 0.0; // Sensor 2
+
 #define AVG_SAMPLES 100
 
 // Wifi and SignalK Connections
-
-#define metaUpdate "{\"updates\": [{\"meta\":[{\"path\":\"propulsion.1.revolutions\", \"value\": {\"units\": \"Hz\"}}]}]}"
-
-#define update1 "{ \"context\": \""
-#define update2 "\", \"updates\": [ {  \"source\": {\"label\": \"engine\" }, \"values\": [ { \"path\": \"propulsion.1.revolutions\",\"value\":"
-#define update21 "}, { \"path\": \"propulsion.1.state\",\"value\": \""
-#define update4 "\" } ] } ]}"
-
 
 char ssid[20] = "Yamato";
 char password[20] = "ailataN1991";
@@ -41,21 +68,21 @@ char skpath[100] = "/signalk/v1/stream?subscribe=none";
 // Frequency to rpme conversion
 // it is freq * 60 / poles (cycles/s -> cycles / min * poles)
 
-
-const double poles = 6.0;   // Number of poles in the alternatos
+const double poles = 6.0;    // Number of poles in the alternatos
 const double relation = 3.0; // Relation between engine speed and alternator speed
-
 
 unsigned long last = micros();
 int samples = 0;
-unsigned long ac_period = 0; 
+unsigned long ac_period = 0;
 double f = 0;
 double rpm = 0;
 
 char buffer[256];
 
+// 1-Wire and Temperature
 
-
+OneWire oneWire(oneWireBus);
+DallasTemperature tSensors(&oneWire);
 
 using namespace websockets;
 
@@ -73,19 +100,40 @@ TaskHandle_t task_pres;
 TaskHandle_t task_empty;
 TaskHandle_t taskNetwork;
 
-
 int ledState = 0;
 int ledOn = 0;
 int ledOff = 100;
 
 // Function Prototypes
 
+uint64_t tou64(DeviceAddress addr)
+{
+  uint64_t acum = 0;
+  for (int i = 0; i < 8; i++)
+  {
+    acum = acum * 256 + addr[7 - i];
+  }
+  return acum;
+}
+
+int lookupDevice(DeviceId device)
+{
+
+  for (int i = 0; i < 5; i++)
+  {
+    if (device.id == tempDevices[i].id)
+    {
+      return (i);
+    }
+  }
+  return -1;
+}
 
 void IRAM_ATTR ISR()
-{  
-  #if DEBUG_ISR
-    Serial.print(".");
-  #endif
+{
+#if DEBUG_ISR
+  Serial.print(".");
+#endif
 
   unsigned long m = micros();
   unsigned long period = m - last;
@@ -123,8 +171,6 @@ void toggleLed()
   digitalWrite(ONBOARD_LED, ledState);
 }
 
-
-
 void ledTask(void *parameter)
 {
 
@@ -146,8 +192,6 @@ void ledTask(void *parameter)
 
 #include "signalk.h"
 
-
-
 // This writes the screen and computes frequency ajd angle.
 void presentationTask(void *parameter)
 {
@@ -164,24 +208,32 @@ void presentationTask(void *parameter)
       ac_period = 0;
 
       f = double(1000000) / double(period);
-      rpm = f * 60.0 / poles / relation;
+      rpm = f * 60.0 / poles * 2 / relation;
 
-      if(DEBUG_1){
-        Serial.print("Ac Period "); Serial.print(old_ac_period); Serial.print(" Samples "); Serial.print(oldsamples); Serial.print(" f "); Serial.print(f); Serial.print(" RPM "); Serial.println(rpm);
+      if (DEBUG_1)
+      {
+        Serial.print("Ac Period ");
+        Serial.print(old_ac_period);
+        Serial.print(" Samples ");
+        Serial.print(oldsamples);
+        Serial.print(" f ");
+        Serial.print(f);
+        Serial.print(" RPM ");
+        Serial.println(rpm);
       }
 
-      sendData(f / poles / relation);
-
-    }else if ((micros() - last) > 1000000l){
+      sendData( f / poles  / relation);
+    }
+    else if ((micros() - last) > 1000000l)
+    {
       f = 0.0;
       last = micros();
       sendData(0.0);
     }
 
-    vTaskDelay(50); // May be adjusted for necessity 
+    vTaskDelay(50); // May be adjusted for necessity Era 50changed for debug T
   }
 }
-
 
 // Runs the on board led to show connection status to signalk
 void emptyTask(void *parameter)
@@ -203,9 +255,9 @@ void emptyTask(void *parameter)
   }
 }
 
-
-  // Load Data from EEPROM
-void loadEEPROM(){
+// Load Data from EEPROM
+void loadEEPROM()
+{
 
   float f1;
   float f2;
@@ -216,7 +268,7 @@ void loadEEPROM(){
   EEPROM.get(0, f1);
   EEPROM.get(4, f2);
 
-  if (isnan(f1) || isnan(f2) || f1 == 0.0 || f2 == 0.0 )
+  if (isnan(f1) || isnan(f2) || f1 == 0.0 || f2 == 0.0)
   {
 
     f1 = 1.0;
@@ -276,21 +328,97 @@ void setup()
 {
 
   Serial.begin(115200);
-  
+
   pinMode(IN_GPIO, INPUT);
- 
 
   loadEEPROM();
- 
+
+  tSensors.begin();
+
+  ntDevices = tSensors.getDeviceCount();
+
+  if (DEBUG_T)
+  {
+    Serial.print("Found ");
+    ntDevices;
+    Serial.println("devices.");
+  }
+
+  for (int i = 0; i < ntDevices; i++)
+  {
+    tSensors.getAddress(tempDeviceAddress.address, i);
+    if (DEBUG_T)
+    {
+      Serial.print("    Device ");
+      Serial.print(i);
+      Serial.print(" ");
+
+      Serial.print(tou64(tempDeviceAddress.address));
+      Serial.print(" ");
+
+      Serial.print(tempDeviceAddress.id);
+
+      Serial.print("  ");
+
+      int idev = lookupDevice(tempDeviceAddress);
+      Serial.print(idev);
+      Serial.println();
+    }
+  }
+
   xTaskCreatePinnedToCore(presentationTask, "Presentation", 4000, NULL, 1, &task_pres, 0);
   xTaskCreatePinnedToCore(emptyTask, "Empty", 4000, NULL, 1, &task_empty, 1);
   xTaskCreatePinnedToCore(networkTask, "TaskNetwork", 4000, NULL, 1, &taskNetwork, 0);
- 
-  attachInterrupt(IN_GPIO, ISR, CHANGE);
 
+  attachInterrupt(IN_GPIO, ISR, CHANGE);
 }
 void loop()
 {
+  tSensors.requestTemperatures();
+  DeviceAddress oldDeviceAddress;
 
-  vTaskDelay(10);
+  for (int i = 0; i < ntDevices; i++)
+  {
+    if (tSensors.getAddress(tempDeviceAddress.address, i))
+    {
+      int device = lookupDevice(tempDeviceAddress);
+
+      if (device != -1)
+      {
+
+        float tc = tSensors.getTempC(tempDeviceAddress.address);
+
+        if (device == 0)
+        {
+          tempEngine = baseKelvin + tc;
+        }
+        else if (device == 1)
+        {
+          tempExhaust = baseKelvin + tc;
+        }
+        else if (device == 2)
+        {
+          tempEngineRoom = baseKelvin + tc;
+        }
+
+        if (device == 0 || device == 1 || device == 2)
+        {
+          sendTemperature(tc, device);
+        }
+
+        if (DEBUG_T)
+        {
+          Serial.print("Device ");
+          Serial.print(device);
+          Serial.print(" (");
+          Serial.print(tempDeviceAddress.id);
+          Serial.print(") ");
+          Serial.print(tc);
+          Serial.println(" ºC");
+        }
+      }
+    }
+  }
+
+  vTaskDelay(4000);
 }
